@@ -8,7 +8,7 @@ import {
   type ProgressCallback,
 } from "@huggingface/transformers";
 
-const MAX_NEW_TOKENS = 128;
+const MAX_TOKENS = 512;
 
 // TODO: find hf built-in
 const GEMMA_EOT_TOKEN_ID = 106;
@@ -43,7 +43,11 @@ class TextGenerationPipeline {
   }
 }
 
-type WorkerMessage = { type: "generate"; prompt: string } | { type: "stop" };
+type WorkerMessage =
+  | { type: "generate"; prompt: string }
+  | { type: "stop" }
+  | { type: "resume" }
+  | { type: "step" };
 
 type WorkerResponse =
   | { type: "ready" }
@@ -67,54 +71,40 @@ function sampleFromProbs(probs: number[]): number {
   return probs.length - 1;
 }
 
-async function generate(prompt: string) {
-  console.log("[worker]: generating for prompt", prompt);
-  cancelCurrent?.();
-  let cancelled = false;
-  cancelCurrent = () => {
-    cancelled = true;
-  };
+class Worker {
+  private tokenizer!: PreTrainedTokenizer;
+  private model!: PreTrainedModel;
+  private tokens: number[] = [];
 
-  const [tokenizer, model] = await TextGenerationPipeline.getInstance();
+  // indicates whether the worker is in the middle of generation.
+  // still true if the generation is paused.
+  private inProgress = false;
 
-  const inputIds = tokenizer.apply_chat_template(
-    [{ role: "user", content: prompt }],
-    { tokenize: true, return_tensor: false, add_generation_prompt: true }
-  );
-
-  if (
-    !Array.isArray(inputIds) ||
-    !inputIds.every((x) => typeof x === "number")
-  ) {
-    throw new Error("Tokenization failed");
+  constructor() {
+    TextGenerationPipeline.getInstance().then(([tokenizer, model]) => {
+      this.tokenizer = tokenizer;
+      this.model = model;
+    });
   }
 
-  let tokens = [...inputIds];
-  console.log("[worker]: tokens", tokens);
-
-  self.postMessage({
-    type: "generation-start",
-  } satisfies WorkerResponse);
-
-  const maxTokens = tokens.length + MAX_NEW_TOKENS;
-
-  while (!cancelled && tokens.length < maxTokens) {
-    const input_ids = idsToTensor(tokens);
-    const attention_mask = idsToTensor(Array(tokens.length).fill(1));
-    const out = await model({
+  /**
+   * Generates a single token, updating this.tokens and sending the token to the main thread.
+   */
+  private async generateSingle(): Promise<number> {
+    const input_ids = idsToTensor(this.tokens);
+    const attention_mask = idsToTensor(Array(this.tokens.length).fill(1));
+    const out = await this.model({
       input_ids,
       attention_mask,
     });
 
-    // console.log("[worker]: out", out.logits[0][out.logits.dims[1] - 1].data);
-
     const nextProbs = softmax(out.logits[0][out.logits.dims[1] - 1].data);
     const nextToken = sampleFromProbs(nextProbs);
-    // console.log("[worker]: nextToken", nextToken);
+    console.log("[worker]: nextToken", nextToken);
 
-    tokens = [...tokens, nextToken];
+    this.tokens = [...this.tokens, nextToken];
 
-    const decoded = tokenizer.decode([nextToken], {
+    const decoded = this.tokenizer.decode([nextToken], {
       skip_special_tokens: true,
     });
 
@@ -123,18 +113,83 @@ async function generate(prompt: string) {
       text: decoded,
     } satisfies WorkerResponse);
 
-    if (nextToken === GEMMA_EOT_TOKEN_ID || tokens.length >= maxTokens) {
-      break;
+    return nextToken;
+  }
+
+  /**
+   * Generates tokens until the maximum number of tokens is reached or the generation is cancelled.
+   * Assumes that this.tokens is already set by a previous generation.
+   */
+  private async generateLoop() {
+    if (this.tokens.length === 0) {
+      throw new Error("generate() should be called first.");
+    }
+
+    cancelCurrent?.();
+    let cancelled = false;
+    cancelCurrent = () => {
+      cancelled = true;
+    };
+
+    while (!cancelled && this.tokens.length < MAX_TOKENS) {
+      const nextToken = await this.generateSingle();
+      if (
+        nextToken === GEMMA_EOT_TOKEN_ID ||
+        this.tokens.length >= MAX_TOKENS
+      ) {
+        self.postMessage({ type: "done" } satisfies WorkerResponse);
+        this.inProgress = false;
+        return;
+      }
     }
   }
 
-  self.postMessage({ type: "done" } satisfies WorkerResponse);
+  public async generate(prompt: string) {
+    this.inProgress = true;
+
+    const inputIds = this.tokenizer.apply_chat_template(
+      [{ role: "user", content: prompt }],
+      { tokenize: true, return_tensor: false, add_generation_prompt: true }
+    ) as number[];
+
+    this.tokens = [...inputIds];
+    console.log("[worker]: tokens", this.tokens);
+
+    self.postMessage({
+      type: "generation-start",
+    } satisfies WorkerResponse);
+
+    await this.generateLoop();
+  }
+
+  public async resume() {
+    if (!this.inProgress) {
+      return;
+    }
+
+    await this.generateLoop();
+  }
+
+  public async step() {
+    if (!this.inProgress) {
+      return;
+    }
+
+    const nextToken = await this.generateSingle();
+    if (nextToken === GEMMA_EOT_TOKEN_ID || this.tokens.length >= MAX_TOKENS) {
+      self.postMessage({ type: "done" } satisfies WorkerResponse);
+      this.inProgress = false;
+      return;
+    }
+  }
 }
+
+let worker = new Worker();
 
 self.addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
   const data = event.data;
   if (data.type === "generate") {
-    generate(data.prompt).catch((err) => {
+    worker.generate(data.prompt).catch((err) => {
       self.postMessage({
         type: "error",
         error: err instanceof Error ? err.message : String(err),
@@ -142,6 +197,10 @@ self.addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
     });
   } else if (data.type === "stop") {
     cancelCurrent?.();
+  } else if (data.type === "resume") {
+    worker.resume();
+  } else if (data.type === "step") {
+    worker.step();
   }
 });
 

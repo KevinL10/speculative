@@ -4,7 +4,8 @@ import "./App.css";
 function App() {
   const [prompt, setPrompt] = useState("");
   const [generation, setGeneration] = useState<string | null>(null);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isPaused, setIsPaused] = useState(true);
   const workerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
@@ -15,11 +16,14 @@ function App() {
     const handleMessage = (event: MessageEvent) => {
       const message = event.data;
       if (message.type === "generation-start") {
+        setIsGenerating(true);
+        setIsPaused(false);
         setGeneration("");
       } else if (message.type === "token") {
         setGeneration((prev) => (prev ? prev + message.text : message.text));
       } else if (message.type === "done") {
-        console.log("finisehd generating");
+        setIsGenerating(false);
+        setIsPaused(true);
       } else if (message.type === "error") {
         setGeneration(`Error: ${message.error ?? "Unknown error"}`);
       } else if (message.type === "ready") {
@@ -70,7 +74,23 @@ function App() {
         <div className="control-bar">
           <button
             className="control-btn"
-            onClick={() => setIsPaused(!isPaused)}
+            onClick={() => {
+              if (isPaused) {
+                workerRef.current?.postMessage({
+                  type: "resume",
+                  prompt: prompt,
+                });
+              } else {
+                workerRef.current?.postMessage({
+                  type: "stop",
+                  prompt: prompt,
+                });
+              }
+
+              if (isGenerating) {
+                setIsPaused(!isPaused);
+              }
+            }}
             title={isPaused ? "Resume" : "Pause"}
           >
             {isPaused ? (
@@ -94,7 +114,13 @@ function App() {
               </svg>
             )}
           </button>
-          <button className="control-btn" title="Next Step">
+          <button
+            className="control-btn"
+            title="Next Step"
+            onClick={() => {
+              workerRef.current?.postMessage({ type: "step" });
+            }}
+          >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
               <path d="M6 18l8.5-6L6 6v12z" />
               <rect x="16" y="6" width="2" height="12" />
