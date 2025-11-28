@@ -47,9 +47,23 @@ let targetModel = await AutoModelForCausalLM.from_pretrained(TARGET_MODEL, {
 console.log("target model loaded");
 
 console.log("tokenizing...");
-const { input_ids, attention_mask } = await tokenizer("What's your name?");
+let messages = [
+  { role: "user", content: "Can you tell me about the history of Japan?" },
+];
+let input_ids = tokenizer.apply_chat_template(messages, {
+  tokenize: true,
+  return_tensor: false,
+});
+console.log("input_ids", input_ids);
 
-let tokens: number[] = Array.from(input_ids.data);
+if (
+  !Array.isArray(input_ids) ||
+  !input_ids.every((x) => typeof x === "number")
+) {
+  throw new Error("input_ids is not of type number[]");
+}
+
+let tokens: number[] = Array.from(input_ids);
 
 const LOOKAHEAD = 10;
 

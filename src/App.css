@@ -1,42 +1,138 @@
-#root {
-  max-width: 1280px;
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 800px;
   margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  padding: 3rem 2rem;
+  box-sizing: border-box;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Input Section */
+.input-section {
+  display: flex;
+  justify-content: center;
+  padding-top: 2rem;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
+.prompt-input {
+  width: 100%;
+  max-width: 600px;
+  padding: 1rem 1.5rem;
+  font-size: 1.1rem;
+  font-family: "IBM Plex Mono", monospace;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.prompt-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.prompt-input:focus {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05);
+}
+
+/* Generation Section */
+.generation-section {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3rem 1rem;
+}
+
+.generation-text {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 1.05rem;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.8);
+  max-width: 600px;
+  width: 100%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Navigation Controls */
+.nav-controls {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 2rem;
+}
+
+.control-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 50px;
+}
+
+.control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.control-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.control-btn:active {
+  transform: scale(0.95);
+}
+
+/* Light mode adjustments */
+@media (prefers-color-scheme: light) {
+  .prompt-input {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.02);
   }
-  to {
-    transform: rotate(360deg);
+
+  .prompt-input::placeholder {
+    color: rgba(0, 0, 0, 0.35);
   }
-}
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
+  .prompt-input:focus {
+    border-color: rgba(0, 0, 0, 0.2);
+    background: rgba(0, 0, 0, 0.03);
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.04);
   }
-}
 
-.card {
-  padding: 2em;
-}
+  .generation-text {
+    color: rgba(0, 0, 0, 0.75);
+  }
 
-.read-the-docs {
-  color: #888;
+  .control-bar {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+
+  .control-btn {
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .control-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.85);
+  }
 }
