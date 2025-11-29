@@ -137,10 +137,11 @@ while (tokens.length < 100) {
 
   // sample one more token from the target model if all tokens are accepted
   if (numAccepted === LOOKAHEAD) {
-    const input_ids = idsToTensor([...tokens]);
-    const attention_mask = idsToTensor(Array(tokens.length).fill(1));
-    const out = await targetModel({ input_ids, attention_mask });
-    const nextProbs = softmax(out.logits[0][out.logits.dims[1] - 1].data);
+    // const input_ids = idsToTensor([...tokens]);
+    // const attention_mask = idsToTensor(Array(tokens.length).fill(1));
+    // const out = await targetModel({ input_ids, attention_mask });
+    // const nextProbs = softmax(out.logits[0][out.logits.dims[1] - 1].data);
+    const nextProbs = targetProbs[targetProbs.length - 1];
     const nextToken = argmax(nextProbs);
     tokens.push(nextToken);
   }

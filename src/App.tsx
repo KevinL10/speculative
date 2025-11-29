@@ -2,11 +2,29 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import "./App.css";
 
 function App() {
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState("tell me about tokyo");
   const [generation, setGeneration] = useState<string | null>(null);
+  const [verifyTokens, setVerifyTokens] = useState<string[]>([]);
+  const [draftTokens, setDraftTokens] = useState<string[]>([]);
+  const [rejectedTokens, setRejectedTokens] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPaused, setIsPaused] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState<{
+    file: string;
+    progress: number;
+  } | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const verifyTokensRef = useRef<string[]>([]);
+  const draftTokensRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    verifyTokensRef.current = verifyTokens;
+  }, [verifyTokens]);
+
+  useEffect(() => {
+    draftTokensRef.current = draftTokens;
+  }, [draftTokens]);
 
   useEffect(() => {
     const worker = new Worker(new URL("./worker.ts", import.meta.url), {
@@ -19,8 +37,30 @@ function App() {
         setIsGenerating(true);
         setIsPaused(false);
         setGeneration("");
-      } else if (message.type === "token") {
-        setGeneration((prev) => (prev ? prev + message.text : message.text));
+        setDraftTokens([]);
+        setVerifyTokens([]);
+        setRejectedTokens([]);
+      } else if (message.type === "update") {
+        console.log("[app]: update", message);
+
+        if (message.stage === "draft") {
+          setDraftTokens((prev) => [...prev, message.token]);
+        } else if (message.stage === "verify") {
+          // We verify from left to right, so remove the first draft token and move it to verified.
+          console.log(message.token, draftTokens);
+          setVerifyTokens((prev) => [...prev, message.token]);
+          setDraftTokens((prev) => prev.slice(1));
+        } else if (message.stage === "sample") {
+          setGeneration(
+            (prev) => prev + verifyTokensRef.current.join("") + message.token
+          );
+          setVerifyTokens([]);
+          setDraftTokens([]);
+          setRejectedTokens([]);
+        } else if (message.stage === "reject") {
+          setRejectedTokens((prev) => [...prev, ...draftTokensRef.current]);
+          setDraftTokens([]);
+        }
       } else if (message.type === "done") {
         setIsGenerating(false);
         setIsPaused(true);
@@ -28,6 +68,14 @@ function App() {
         setGeneration(`Error: ${message.error ?? "Unknown error"}`);
       } else if (message.type === "ready") {
         console.log("worker ready");
+        setIsLoading(false);
+        setLoadingProgress(null);
+      } else if (message.type === "loading-progress") {
+        setIsLoading(true);
+        setLoadingProgress({
+          file: message.file,
+          progress: message.progress,
+        });
       }
     };
 
@@ -45,6 +93,9 @@ function App() {
     const content = prompt.trim();
     if (!content) return;
     setGeneration("");
+    setDraftTokens([]);
+    setVerifyTokens([]);
+    setRejectedTokens([]);
     workerRef.current?.postMessage({ type: "stop" });
     workerRef.current?.postMessage({ type: "generate", prompt: content });
   };
@@ -66,8 +117,38 @@ function App() {
         />
       </div>
 
-      <div className="generation-section">
-        {generation && <div className="generation-text">{generation}</div>}
+      <div className={`generation-section ${isLoading ? "loading" : ""}`}>
+        {isLoading && loadingProgress ? (
+          <div className="loading-container">
+            <div className="loading-spinner"></div>
+            <div className="loading-text">
+              Loading {loadingProgress.file}...
+            </div>
+            <div className="loading-progress">
+              {loadingProgress.progress.toFixed(2)}%
+            </div>
+          </div>
+        ) : (
+          (generation ||
+            verifyTokens.length > 0 ||
+            draftTokens.length > 0 ||
+            rejectedTokens.length > 0) && (
+            <div className="generation-text">
+              {generation}
+              {verifyTokens.length > 0 && (
+                <span className="verified-tokens">{verifyTokens.join("")}</span>
+              )}
+              {rejectedTokens.length > 0 && (
+                <span className="rejected-tokens">
+                  {rejectedTokens.join("")}
+                </span>
+              )}
+              {draftTokens.length > 0 && (
+                <span className="draft-tokens">{draftTokens.join("")}</span>
+              )}
+            </div>
+          )
+        )}
       </div>
 
       <div className="nav-controls">
