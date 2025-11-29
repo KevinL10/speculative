@@ -4,12 +4,12 @@ import {
   PreTrainedModel,
   PreTrainedTokenizer,
   Tensor,
+  env,
   softmax,
   type ProgressCallback,
 } from "@huggingface/transformers";
 
 const LOOKAHEAD = 5;
-
 // Note: this is the Gemma <end_of_turn> token.
 const EOT_TOKEN_ID = 106;
 
@@ -149,7 +149,7 @@ class Worker {
   private async sampleTargetProbs(): Promise<number[][]> {
     const logits = await this.sample(this.targetModel);
     const probs = [];
-    for (let t = 0; t < LOOKAHEAD; t++) {
+    for (let t = 0; t < LOOKAHEAD + 1; t++) {
       probs.push(softmax(logits[0][this.tokens.length + t - 1].data));
     }
     return probs;
@@ -263,6 +263,7 @@ class Worker {
         token: null,
       });
       this.state = "sample";
+      await new Promise((resolve) => setTimeout(resolve, 100));
       return;
     }
 
@@ -270,6 +271,7 @@ class Worker {
     if (this.verifyIdx === this.draftTokens.length) {
       this.state = "sample";
     }
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   private async handleSample() {
