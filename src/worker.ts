@@ -15,23 +15,25 @@ const EOT_TOKEN_ID = 106;
 
 let cancelCurrent: (() => void) | null = null;
 
-function progressCallback(progressInfo: any): void {
-  if (progressInfo.status === "progress") {
-    console.log(`progress: ${progressInfo.progress}`);
-    self.postMessage({
-      type: "loading-progress",
-      file: progressInfo.file || "model",
-      progress: progressInfo.progress || 0,
-    });
-  }
+function createProgressCallback(modelName: string) {
+  return (progressInfo: any): void => {
+    if (progressInfo.status === "progress") {
+      console.log(`progress: ${progressInfo.progress}`);
+      self.postMessage({
+        type: "loading-progress",
+        file: `${modelName}: ${progressInfo.file || "model"}`,
+        progress: progressInfo.progress || 0,
+      });
+    }
+  };
 }
 
 class TextGenerationPipeline {
-  static draftModelId = "onnx-community/gemma-3-270m-it-ONNX";
-  static targetModelId = "onnx-community/gemma-3-1b-it-ONNX-GQA";
+  // static draftModelId = "onnx-community/gemma-3-270m-it-ONNX";
+  // static targetModelId = "onnx-community/gemma-3-1b-it-ONNX";
 
-  // static draftModelId = "onnx-community/Qwen3-0.6B-ONNX";
-  // static targetModelId = "onnx-community/Qwen3-1.7B-ONNX";
+  static draftModelId = "onnx-community/Qwen3-0.6B-ONNX";
+  static targetModelId = "onnx-community/Qwen3-1.7B-ONNX";
 
   // static draftModelId = "onnx-community/SmolLM2-135M-Instruct-ONNX";
   // static targetModelId = "onnx-community/SmolLM2-360M-Instruct-ONNX";
@@ -39,11 +41,9 @@ class TextGenerationPipeline {
   static draftModel: Promise<PreTrainedModel> | null = null;
   static targetModel: Promise<PreTrainedModel> | null = null;
 
-  static async getInstance(
-    progress_callback: ProgressCallback | undefined = undefined
-  ) {
+  static async getInstance() {
     this.tokenizer ??= AutoTokenizer.from_pretrained(this.draftModelId, {
-      progress_callback,
+      progress_callback: createProgressCallback("Tokenizer"),
     });
 
     this.draftModel ??= AutoModelForCausalLM.from_pretrained(
@@ -51,7 +51,7 @@ class TextGenerationPipeline {
       {
         dtype: "q4f16",
         device: "webgpu",
-        progress_callback,
+        progress_callback: createProgressCallback("Draft Model"),
       }
     ).catch((err) => {
       console.error("Error loading draft model:", err);
@@ -63,7 +63,7 @@ class TextGenerationPipeline {
       {
         dtype: "q4f16",
         device: "webgpu",
-        progress_callback,
+        progress_callback: createProgressCallback("Target Model"),
       }
     ).catch((err) => {
       console.error("Error loading target model:", err);
@@ -83,14 +83,6 @@ type WorkerMessage =
   | { type: "stop" }
   | { type: "resume" }
   | { type: "step" };
-
-type WorkerResponse =
-  | { type: "ready" }
-  | { type: "generation-start" }
-  | { type: "update"; stage: GenerationStage; token: string }
-  | { type: "done" }
-  | { type: "error"; error: string }
-  | { type: "loading-progress"; file: string; progress: number };
 
 function idsToTensor(ids: number[]): Tensor {
   const data = BigInt64Array.from(ids, (value) => BigInt(value));
@@ -124,7 +116,7 @@ class Worker {
   private inProgress = false;
 
   constructor() {
-    TextGenerationPipeline.getInstance(progressCallback).then(
+    TextGenerationPipeline.getInstance().then(
       ([tokenizer, draftModel, targetModel]) => {
         this.tokenizer = tokenizer;
         this.draftModel = draftModel;

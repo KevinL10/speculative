@@ -10,10 +10,9 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPaused, setIsPaused] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
-  const [loadingProgress, setLoadingProgress] = useState<{
-    file: string;
-    progress: number;
-  } | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState<
+    Record<string, number>
+  >({});
   const workerRef = useRef<Worker | null>(null);
   const verifyTokensRef = useRef<string[]>([]);
   const draftTokensRef = useRef<string[]>([]);
@@ -69,12 +68,17 @@ function App() {
       } else if (message.type === "ready") {
         console.log("worker ready");
         setIsLoading(false);
-        setLoadingProgress(null);
+        setLoadingProgress({});
       } else if (message.type === "loading-progress") {
-        setIsLoading(true);
-        setLoadingProgress({
-          file: message.file,
-          progress: message.progress,
+        setLoadingProgress((prev) => {
+          const updated = { ...prev };
+          if (message.progress >= 100.0) {
+            delete updated[message.file];
+          } else {
+            updated[message.file] = message.progress;
+          }
+          setIsLoading(Object.keys(updated).length > 0);
+          return updated;
         });
       }
     };
@@ -118,15 +122,15 @@ function App() {
       </div>
 
       <div className={`generation-section ${isLoading ? "loading" : ""}`}>
-        {isLoading && loadingProgress ? (
+        {isLoading && Object.keys(loadingProgress).length > 0 ? (
           <div className="loading-container">
             <div className="loading-spinner"></div>
-            <div className="loading-text">
-              Loading {loadingProgress.file}...
-            </div>
-            <div className="loading-progress">
-              {loadingProgress.progress.toFixed(2)}%
-            </div>
+            {Object.entries(loadingProgress).map(([file, progress]) => (
+              <div key={file} className="loading-item">
+                <div className="loading-text">Loading {file}...</div>
+                <div className="loading-progress">{progress.toFixed(2)}%</div>
+              </div>
+            ))}
           </div>
         ) : (
           (generation ||
