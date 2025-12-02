@@ -8,7 +8,7 @@ import {
 import "./App.css";
 
 function App() {
-  const [prompt, setPrompt] = useState("tell me a story");
+  const [prompt, setPrompt] = useState("tell me about yourself");
   const [generation, setGeneration] = useState<string | null>(null);
   const [verifyTokens, setVerifyTokens] = useState<string[]>([]);
   const [draftTokens, setDraftTokens] = useState<string[]>([]);
@@ -60,6 +60,9 @@ function App() {
           setGeneration(
             (prev) => prev + verifyTokensRef.current.join("") + message.token
           );
+          // Explicitly clear the reference, since we may receive a "done" message before
+          // the verify tokens are reset, causing the verified tokens to show up twice.
+          verifyTokensRef.current = [];
           setVerifyTokens([]);
           setDraftTokens([]);
           setRejectedTokens([]);
@@ -71,7 +74,6 @@ function App() {
         message.type === "done" &&
         message.promptId === currentPromptIdRef.current
       ) {
-        console.log("[app]: done");
         setIsGenerating(false);
         setIsPaused(true);
         setGeneration((prev) => prev + verifyTokensRef.current.join(""));

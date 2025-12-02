@@ -7,7 +7,7 @@ import {
   softmax,
 } from "@huggingface/transformers";
 
-const LOOKAHEAD = 10;
+const LOOKAHEAD = 5;
 // Note: this is the Gemma <end_of_turn> token.
 // TODO: fix token id handling
 const EOT_TOKEN_ID = 106;
@@ -293,7 +293,6 @@ class Worker {
 
   private async handleSample() {
     let probs: number[] = [];
-
     if (this.verifyIdx === this.draftTokens.length) {
       probs = this.targetProbs[this.targetProbs.length - 1];
     } else {
@@ -310,6 +309,7 @@ class Worker {
     });
 
     this.tokens.push(token);
+    console.log(`[worker]: sampled ${decoded} (${token})`);
     self.postMessage({
       type: "update",
       stage: "sample",
@@ -319,6 +319,7 @@ class Worker {
 
     this.state = "draft";
     this.draftTokens = [];
+    this.draftProbs = [];
     this.verifyIdx = null;
     return;
   }
@@ -342,6 +343,7 @@ class Worker {
 
     if (this.tokens[this.tokens.length - 1] === EOT_TOKEN_ID) {
       console.log("[worker]: done");
+      this.inProgress = false;
       self.postMessage({
         type: "done",
         promptId: this.currentPromptId!,
