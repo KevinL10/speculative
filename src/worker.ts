@@ -4,9 +4,7 @@ import {
   PreTrainedModel,
   PreTrainedTokenizer,
   Tensor,
-  env,
   softmax,
-  type ProgressCallback,
 } from "@huggingface/transformers";
 
 const LOOKAHEAD = 10;
@@ -31,23 +29,8 @@ function createProgressCallback(modelName: string) {
 class TextGenerationPipeline {
   // works with q4 but not q4f16.
   static draftModelId = "onnx-community/gemma-3-270m-it-ONNX";
-  // works with q4f16 but not q4: https://github.com/huggingface/transformers.js/issues/1469#issuecomment-3599388136
   static targetModelId = "onnx-community/gemma-3-1b-it-ONNX-GQA";
-  // static targetModelId = "vulnix/gemma-3-1b-it";
-  // static draftModelId = "onnx-community/gemma-3-270m-it-ONNX";
-  // static targetModelId = "onnx-community/gemma-3-1b-it-ONNX-GQA";
-  // static targetModelId = "onnx-community/Llama-3.2-1B-Instruct-ONNX";
 
-  // static draftModelId = "onnx-community/Qwen2.5-0.5B-Instruct";
-  // static targetModelId = "onnx-community/Qwen2.5-1.5B-Instruct";
-  // static draftModelId = "onnx-community/Qwen3-0.6B-ONNX";
-  // static targetModelId = "onnx-community/Qwen3-1.7B-ONNX";
-  // static draftModelId = "onnx-community/Llama-3.2-1B-Instruct-ONNX";
-  // static targetModelId = "onnx-community/Llama-3.2-3B-Instruct-ONNX";
-
-  // static draftModelId = "onnx-community/SmolLM2-135M-Instruct-ONNX";
-  // static targetModelId = "onnx-community/SmolLM2-360M-Instruct-ONNX";
-  // static targetModelId = "HuggingFaceTB/SmolLM2-135M-Instruct";
   static tokenizer: Promise<PreTrainedTokenizer> | null = null;
   static draftModel: Promise<PreTrainedModel> | null = null;
   static targetModel: Promise<PreTrainedModel> | null = null;
@@ -62,7 +45,9 @@ class TextGenerationPipeline {
       {
         dtype: "q4",
         device: "webgpu",
-        progress_callback: createProgressCallback("Draft Model"),
+        progress_callback: createProgressCallback(
+          "Draft Model (gemma-3-270m-it)"
+        ),
       }
     ).catch((err) => {
       console.error("Error loading draft model:", err);
@@ -74,7 +59,9 @@ class TextGenerationPipeline {
       {
         dtype: "q4f16",
         device: "webgpu",
-        progress_callback: createProgressCallback("Target Model"),
+        progress_callback: createProgressCallback(
+          "Target Model (gemma-3-1b-it)"
+        ),
       }
     ).catch((err) => {
       console.error("Error loading target model:", err);
@@ -88,7 +75,7 @@ class TextGenerationPipeline {
 type GenerationStage = "draft" | "verify" | "sample";
 
 type WorkerMessage =
-  | { type: "generate"; prompt: string }
+  | { type: "generate"; prompt: string; promptId: number }
   | { type: "stop" }
   | { type: "resume" }
   | { type: "step" };
@@ -119,6 +106,7 @@ class Worker {
   private draftProbs: number[][] = [];
   private targetProbs: number[][] = [];
   private verifyIdx: number | null = null;
+  private currentPromptId: number | null = null;
 
   // indicates whether the worker is in the middle of generation.
   // still true if the generation is paused.
@@ -142,14 +130,10 @@ class Worker {
     const attention_mask = idsToTensor(
       Array(this.tokens.length + this.draftTokens.length).fill(1)
     );
-    console.log("[worker]: input_ids", input_ids.data);
-    console.log("[worker]: attention_mask", attention_mask.data);
-    // return null;
     const out = await model({
       input_ids,
       attention_mask,
     });
-    console.log("[worker]: out", out.logits);
     // await new Promise((resolve) => setTimeout(resolve, 100));
     return out.logits;
   }
@@ -179,7 +163,6 @@ class Worker {
     if (this.tokens.length === 0) {
       throw new Error("generate() should be called first.");
     }
-    console.log("[worker] setting up cancel");
     cancelCurrent?.();
     let cancelled = false;
     cancelCurrent = () => {
@@ -188,33 +171,38 @@ class Worker {
 
     while (!cancelled && this.tokens[this.tokens.length - 1] !== EOT_TOKEN_ID) {
       try {
-        console.log("[worker]: step");
         await this.step();
       } catch (err) {
         console.error("[worker]: error in step", err);
         self.postMessage({
           type: "error",
           error: err instanceof Error ? err.message : String(err),
+          promptId: this.currentPromptId!,
         });
         break;
       }
     }
-    console.log("[worker]: done");
   }
 
-  public async generate(prompt: string) {
+  public async generate(prompt: string, promptId: number) {
+    cancelCurrent?.();
     this.inProgress = true;
+    this.currentPromptId = promptId;
+    this.draftTokens = [];
+    this.draftProbs = [];
+    this.targetProbs = [];
+    this.verifyIdx = null;
+    this.state = "draft";
 
     const inputIds = this.tokenizer.apply_chat_template(
       [{ role: "user", content: prompt }],
       { tokenize: true, return_tensor: false, add_generation_prompt: true }
     ) as number[];
-
     this.tokens = [...inputIds];
-    console.log("[worker]: tokens", this.tokens);
 
     self.postMessage({
       type: "generation-start",
+      promptId: this.currentPromptId!,
     });
 
     await this.generateLoop();
@@ -232,7 +220,6 @@ class Worker {
     const [nextToken, nextProbs] = await this.sampleTokenAndProbs(
       this.draftModel
     );
-    console.log("[worker]: draft", nextToken, nextProbs);
     this.draftTokens.push(nextToken);
     this.draftProbs.push(nextProbs);
 
@@ -248,6 +235,7 @@ class Worker {
       type: "update",
       stage: "draft",
       token: decoded,
+      promptId: this.currentPromptId!,
     });
   }
 
@@ -263,24 +251,26 @@ class Worker {
     const x = this.draftTokens[this.verifyIdx];
     const q = this.targetProbs[this.verifyIdx][x];
     const p = this.draftProbs[this.verifyIdx][x];
+    const decoded = this.tokenizer.decode([x], {
+      skip_special_tokens: true,
+    });
 
     if (r < Math.min(1, q / p)) {
-      console.log("[worker]: accepted", x);
+      console.log(`[worker]: accepted ${decoded} (${x})`);
       this.tokens.push(x);
-      const decoded = this.tokenizer.decode([x], {
-        skip_special_tokens: true,
-      });
       self.postMessage({
         type: "update",
         stage: "verify",
         token: decoded,
+        promptId: this.currentPromptId!,
       });
     } else {
-      console.log("[worker]: rejected", x);
+      console.log(`[worker]: rejected ${decoded} (${x})`);
       self.postMessage({
         type: "update",
         stage: "reject",
-        token: null,
+        token: decoded,
+        promptId: this.currentPromptId!,
       });
       this.state = "sample";
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -317,6 +307,7 @@ class Worker {
       type: "update",
       stage: "sample",
       token: decoded,
+      promptId: this.currentPromptId!,
     });
 
     this.state = "draft";
@@ -332,6 +323,7 @@ class Worker {
     ) {
       return;
     }
+    console.log("[worker]: step", this.state);
 
     if (this.state === "draft") {
       await this.handleDraft();
@@ -339,6 +331,14 @@ class Worker {
       await this.handleVerify();
     } else {
       await this.handleSample();
+    }
+
+    if (this.tokens[this.tokens.length - 1] === EOT_TOKEN_ID) {
+      console.log("[worker]: done");
+      self.postMessage({
+        type: "done",
+        promptId: this.currentPromptId!,
+      });
     }
   }
 }
@@ -348,10 +348,11 @@ let worker = new Worker();
 self.addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
   const data = event.data;
   if (data.type === "generate") {
-    worker.generate(data.prompt).catch((err) => {
+    worker.generate(data.prompt, data.promptId).catch((err) => {
       self.postMessage({
         type: "error",
         error: err instanceof Error ? err.message : String(err),
+        promptId: data.promptId,
       });
     });
   } else if (data.type === "stop") {

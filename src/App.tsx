@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  type KeyboardEvent,
+} from "react";
 import "./App.css";
 
 function App() {
-  const [prompt, setPrompt] = useState("tell me about tokyo");
+  const [prompt, setPrompt] = useState("tell me a story");
   const [generation, setGeneration] = useState<string | null>(null);
   const [verifyTokens, setVerifyTokens] = useState<string[]>([]);
   const [draftTokens, setDraftTokens] = useState<string[]>([]);
@@ -16,6 +22,7 @@ function App() {
   const workerRef = useRef<Worker | null>(null);
   const verifyTokensRef = useRef<string[]>([]);
   const draftTokensRef = useRef<string[]>([]);
+  const currentPromptIdRef = useRef<number>(0);
 
   useEffect(() => {
     verifyTokensRef.current = verifyTokens;
@@ -39,14 +46,14 @@ function App() {
         setDraftTokens([]);
         setVerifyTokens([]);
         setRejectedTokens([]);
-      } else if (message.type === "update") {
-        console.log("[app]: update", message);
-
+      } else if (
+        message.type === "update" &&
+        message.promptId === currentPromptIdRef.current
+      ) {
         if (message.stage === "draft") {
           setDraftTokens((prev) => [...prev, message.token]);
         } else if (message.stage === "verify") {
           // We verify from left to right, so remove the first draft token and move it to verified.
-          console.log(message.token, draftTokens);
           setVerifyTokens((prev) => [...prev, message.token]);
           setDraftTokens((prev) => prev.slice(1));
         } else if (message.stage === "sample") {
@@ -60,13 +67,20 @@ function App() {
           setRejectedTokens((prev) => [...prev, ...draftTokensRef.current]);
           setDraftTokens([]);
         }
-      } else if (message.type === "done") {
+      } else if (
+        message.type === "done" &&
+        message.promptId === currentPromptIdRef.current
+      ) {
+        console.log("[app]: done");
         setIsGenerating(false);
         setIsPaused(true);
+        setGeneration((prev) => prev + verifyTokensRef.current.join(""));
+        setVerifyTokens([]);
+        setDraftTokens([]);
+        setRejectedTokens([]);
       } else if (message.type === "error") {
         setGeneration(`Error: ${message.error ?? "Unknown error"}`);
       } else if (message.type === "ready") {
-        console.log("worker ready");
         setIsLoading(false);
         setLoadingProgress({});
       } else if (message.type === "loading-progress") {
@@ -77,7 +91,6 @@ function App() {
           } else {
             updated[message.file] = message.progress;
           }
-          setIsLoading(Object.keys(updated).length > 0);
           return updated;
         });
       }
@@ -93,20 +106,71 @@ function App() {
     };
   }, []);
 
-  const startGeneration = () => {
+  const startGeneration = useCallback(() => {
     const content = prompt.trim();
     if (!content) return;
+
+    currentPromptIdRef.current += 1;
+
     setGeneration("");
     setDraftTokens([]);
     setVerifyTokens([]);
     setRejectedTokens([]);
     workerRef.current?.postMessage({ type: "stop" });
-    workerRef.current?.postMessage({ type: "generate", prompt: content });
-  };
+    workerRef.current?.postMessage({
+      type: "generate",
+      prompt: content,
+      promptId: currentPromptIdRef.current,
+    });
+  }, [prompt]);
+
+  const togglePauseResume = useCallback(() => {
+    if (isPaused) {
+      workerRef.current?.postMessage({
+        type: "resume",
+        prompt: prompt,
+      });
+    } else {
+      workerRef.current?.postMessage({
+        type: "stop",
+        prompt: prompt,
+      });
+    }
+
+    if (isGenerating) {
+      setIsPaused(!isPaused);
+    }
+  }, [isPaused, isGenerating, prompt]);
+
+  const handleStartOrToggle = useCallback(() => {
+    if (!isGenerating) {
+      startGeneration();
+    } else {
+      togglePauseResume();
+    }
+  }, [isGenerating, startGeneration, togglePauseResume]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") startGeneration();
   };
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === " " &&
+        e.target instanceof HTMLElement &&
+        e.target.tagName !== "INPUT"
+      ) {
+        e.preventDefault();
+        handleStartOrToggle();
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown as any);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown as any);
+    };
+  }, [handleStartOrToggle]);
 
   return (
     <div className="app-container">
@@ -122,15 +186,23 @@ function App() {
       </div>
 
       <div className={`generation-section ${isLoading ? "loading" : ""}`}>
-        {isLoading && Object.keys(loadingProgress).length > 0 ? (
+        {isLoading ? (
           <div className="loading-container">
             <div className="loading-spinner"></div>
-            {Object.entries(loadingProgress).map(([file, progress]) => (
-              <div key={file} className="loading-item">
-                <div className="loading-text">Loading {file}...</div>
-                <div className="loading-progress">{progress.toFixed(2)}%</div>
+            {Object.keys(loadingProgress).length > 0 ? (
+              Object.entries(loadingProgress).map(([file, progress]) => (
+                <div key={file} className="loading-item">
+                  <div className="loading-text">Fetching {file}</div>
+                  <div className="loading-progress">{progress.toFixed(2)}%</div>
+                </div>
+              ))
+            ) : (
+              <div className="loading-item">
+                <div className="loading-text">
+                  Loading models (may take a few seconds)...
+                </div>
               </div>
-            ))}
+            )}
           </div>
         ) : (
           (generation ||
@@ -157,28 +229,12 @@ function App() {
 
       <div className="nav-controls">
         <div className="control-bar">
-          <button
-            className="control-btn"
-            onClick={() => {
-              if (isPaused) {
-                workerRef.current?.postMessage({
-                  type: "resume",
-                  prompt: prompt,
-                });
-              } else {
-                workerRef.current?.postMessage({
-                  type: "stop",
-                  prompt: prompt,
-                });
-              }
-
-              if (isGenerating) {
-                setIsPaused(!isPaused);
-              }
-            }}
-            title={isPaused ? "Resume" : "Pause"}
-          >
-            {isPaused ? (
+          {!isGenerating && (
+            <button
+              className="control-btn"
+              onClick={startGeneration}
+              title="Start"
+            >
               <svg
                 width="24"
                 height="24"
@@ -187,18 +243,36 @@ function App() {
               >
                 <path d="M8 5v14l11-7z" />
               </svg>
-            ) : (
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
-            )}
-          </button>
+            </button>
+          )}
+          {isGenerating && (
+            <button
+              className="control-btn"
+              onClick={togglePauseResume}
+              title={isPaused ? "Resume" : "Pause"}
+            >
+              {isPaused ? (
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              ) : (
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <rect x="6" y="4" width="4" height="16" />
+                  <rect x="14" y="4" width="4" height="16" />
+                </svg>
+              )}
+            </button>
+          )}
           <button
             className="control-btn"
             title="Next Step"
