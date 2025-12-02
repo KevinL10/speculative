@@ -57,9 +57,8 @@ function App() {
           setVerifyTokens((prev) => [...prev, message.token]);
           setDraftTokens((prev) => prev.slice(1));
         } else if (message.stage === "sample") {
-          setGeneration(
-            (prev) => prev + verifyTokensRef.current.join("") + message.token
-          );
+          const verifiedTokens = verifyTokensRef.current.join("");
+          setGeneration((prev) => prev + verifiedTokens + message.token);
           // Explicitly clear the reference, since we may receive a "done" message before
           // the verify tokens are reset, causing the verified tokens to show up twice.
           verifyTokensRef.current = [];
