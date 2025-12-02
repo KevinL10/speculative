@@ -165,7 +165,7 @@ class Worker {
   private async sampleTargetProbs(): Promise<number[][]> {
     const logits = await this.sample(this.targetModel);
     const probs = [];
-    for (let t = 0; t < LOOKAHEAD + 1; t++) {
+    for (let t = 0; t < this.draftTokens.length + 1; t++) {
       probs.push(softmax(logits[0][this.tokens.length + t - 1].data));
     }
     return probs;
