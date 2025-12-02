@@ -9,8 +9,9 @@ import {
   type ProgressCallback,
 } from "@huggingface/transformers";
 
-const LOOKAHEAD = 5;
+const LOOKAHEAD = 10;
 // Note: this is the Gemma <end_of_turn> token.
+// TODO: fix token id handling
 const EOT_TOKEN_ID = 106;
 
 let cancelCurrent: (() => void) | null = null;
@@ -18,7 +19,6 @@ let cancelCurrent: (() => void) | null = null;
 function createProgressCallback(modelName: string) {
   return (progressInfo: any): void => {
     if (progressInfo.status === "progress") {
-      console.log(`progress: ${progressInfo.progress}`);
       self.postMessage({
         type: "loading-progress",
         file: `${modelName}: ${progressInfo.file || "model"}`,
@@ -29,14 +29,25 @@ function createProgressCallback(modelName: string) {
 }
 
 class TextGenerationPipeline {
+  // works with q4 but not q4f16.
+  static draftModelId = "onnx-community/gemma-3-270m-it-ONNX";
+  // works with q4f16 but not q4: https://github.com/huggingface/transformers.js/issues/1469#issuecomment-3599388136
+  static targetModelId = "onnx-community/gemma-3-1b-it-ONNX-GQA";
+  // static targetModelId = "vulnix/gemma-3-1b-it";
   // static draftModelId = "onnx-community/gemma-3-270m-it-ONNX";
-  // static targetModelId = "onnx-community/gemma-3-1b-it-ONNX";
+  // static targetModelId = "onnx-community/gemma-3-1b-it-ONNX-GQA";
+  // static targetModelId = "onnx-community/Llama-3.2-1B-Instruct-ONNX";
 
-  static draftModelId = "onnx-community/Qwen3-0.6B-ONNX";
-  static targetModelId = "onnx-community/Qwen3-1.7B-ONNX";
+  // static draftModelId = "onnx-community/Qwen2.5-0.5B-Instruct";
+  // static targetModelId = "onnx-community/Qwen2.5-1.5B-Instruct";
+  // static draftModelId = "onnx-community/Qwen3-0.6B-ONNX";
+  // static targetModelId = "onnx-community/Qwen3-1.7B-ONNX";
+  // static draftModelId = "onnx-community/Llama-3.2-1B-Instruct-ONNX";
+  // static targetModelId = "onnx-community/Llama-3.2-3B-Instruct-ONNX";
 
   // static draftModelId = "onnx-community/SmolLM2-135M-Instruct-ONNX";
   // static targetModelId = "onnx-community/SmolLM2-360M-Instruct-ONNX";
+  // static targetModelId = "HuggingFaceTB/SmolLM2-135M-Instruct";
   static tokenizer: Promise<PreTrainedTokenizer> | null = null;
   static draftModel: Promise<PreTrainedModel> | null = null;
   static targetModel: Promise<PreTrainedModel> | null = null;
@@ -49,7 +60,7 @@ class TextGenerationPipeline {
     this.draftModel ??= AutoModelForCausalLM.from_pretrained(
       this.draftModelId,
       {
-        dtype: "q4f16",
+        dtype: "q4",
         device: "webgpu",
         progress_callback: createProgressCallback("Draft Model"),
       }
@@ -67,8 +78,6 @@ class TextGenerationPipeline {
       }
     ).catch((err) => {
       console.error("Error loading target model:", err);
-      console.error("Model ID:", this.targetModelId);
-      console.error("Error details:", err?.message, err?.stack, err);
       throw err;
     });
 
@@ -133,8 +142,15 @@ class Worker {
     const attention_mask = idsToTensor(
       Array(this.tokens.length + this.draftTokens.length).fill(1)
     );
-    const out = await model({ input_ids, attention_mask });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    console.log("[worker]: input_ids", input_ids.data);
+    console.log("[worker]: attention_mask", attention_mask.data);
+    // return null;
+    const out = await model({
+      input_ids,
+      attention_mask,
+    });
+    console.log("[worker]: out", out.logits);
+    // await new Promise((resolve) => setTimeout(resolve, 100));
     return out.logits;
   }
 
@@ -163,15 +179,16 @@ class Worker {
     if (this.tokens.length === 0) {
       throw new Error("generate() should be called first.");
     }
-
+    console.log("[worker] setting up cancel");
     cancelCurrent?.();
     let cancelled = false;
     cancelCurrent = () => {
       cancelled = true;
     };
 
-    while (!cancelled && !this.tokens.includes(EOT_TOKEN_ID)) {
+    while (!cancelled && this.tokens[this.tokens.length - 1] !== EOT_TOKEN_ID) {
       try {
+        console.log("[worker]: step");
         await this.step();
       } catch (err) {
         console.error("[worker]: error in step", err);
@@ -179,8 +196,10 @@ class Worker {
           type: "error",
           error: err instanceof Error ? err.message : String(err),
         });
+        break;
       }
     }
+    console.log("[worker]: done");
   }
 
   public async generate(prompt: string) {
@@ -213,6 +232,7 @@ class Worker {
     const [nextToken, nextProbs] = await this.sampleTokenAndProbs(
       this.draftModel
     );
+    console.log("[worker]: draft", nextToken, nextProbs);
     this.draftTokens.push(nextToken);
     this.draftProbs.push(nextProbs);
 
@@ -306,7 +326,10 @@ class Worker {
   }
 
   public async step() {
-    if (!this.inProgress || this.tokens.includes(EOT_TOKEN_ID)) {
+    if (
+      !this.inProgress ||
+      this.tokens[this.tokens.length - 1] === EOT_TOKEN_ID
+    ) {
       return;
     }
 
