@@ -195,7 +195,14 @@ class Worker {
     this.state = "draft";
 
     const inputIds = this.tokenizer.apply_chat_template(
-      [{ role: "user", content: prompt }],
+      [
+        {
+          role: "system",
+          content:
+            "You are a helpful assistant. Respond directly and concisely.",
+        },
+        { role: "user", content: prompt },
+      ],
       { tokenize: true, return_tensor: false, add_generation_prompt: true }
     ) as number[];
     this.tokens = [...inputIds];
