@@ -75,7 +75,6 @@ while (tokens.length < 100) {
   const targetProbs: number[][] = [];
 
   for (let k = 0; k < LOOKAHEAD; k++) {
-    // TODO: figure out how to directly concat tokens without reconstructing the tensor
     const input_ids = idsToTensor([...tokens, ...draftTokens]);
     const attention_mask = idsToTensor(Array(tokens.length + k).fill(1));
     const out = await draftModel({ input_ids, attention_mask });

@@ -9,7 +9,6 @@ import {
 
 const LOOKAHEAD = 5;
 // Note: this is the Gemma <end_of_turn> token.
-// TODO: fix token id handling
 const EOT_TOKEN_ID = 106;
 
 let cancelCurrent: (() => void) | null = null;
